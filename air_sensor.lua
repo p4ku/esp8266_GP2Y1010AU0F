@@ -1,5 +1,4 @@
----  Example how to use
----  esp8266 and
+---  Example of usage esp8266 and
 ---  Sharp Optical Dust Sensor GP2Y1010AU0F
 ---
 ---  Author: Blaszczyk Piotr
@@ -7,7 +6,6 @@
 led_pin = 5      -- Sensor LED PIN (3)
 vRef = 3.3     -- V ref 3.3V
 led_2_pin = 2  -- Test LED pin
-
 
 gpio.mode(led_2_pin, gpio.OUTPUT)
 gpio.mode(led_pin, gpio.OUTPUT)
@@ -27,7 +25,8 @@ function ReadSharpSensor()
     print("ADC value: "..voltage)
 
     -- 0-1023 int value to 0-3.3V
-    calcVoltage = vRef * voltage / 1024
+    shift = 0.66  -- sensor calibration
+    calcVoltage = (vRef * voltage / 1024) + shift
 
     print("Voltage: "..round2(calcVoltage * 1000, 2).."mV")
 
@@ -40,45 +39,59 @@ function ReadSharpSensor()
     return calcVoltage, dustDensity   
 end
 
--- Send data to Thingspeak
-function postThingSpeak()
-    connout = nil
-    connout = net.createConnection(net.TCP, 0)
- 
-    connout:on("receive", function(connout, payloadout)
+function postdata(host, msg) 
+   print(msg)
+   gpio.write(led_2_pin, gpio.HIGH)  -- Test LED ON
+   
+   connout = net.createConnection(net.TCP, 0) 
+   connout:on("receive", function(connout, payloadout)
         if (string.find(payloadout, "Status: 200 OK") ~= nil) then
             print("Posted OK");
             gpio.write(led_2_pin, gpio.LOW) -- Test LED OFF
         end
-    end)
- 
-    connout:on("connection", function(connout, payloadout)
- 
+   end)
+   connout:on("connection", function(connout, payloadout)
         print("Posting...");
         gpio.write(led_2_pin, gpio.HIGH)  -- Test LED ON
- 
         local voltage, dustDensity = ReadSharpSensor();
  
-        connout:send("GET /update?api_key=UMA5PXH21E3R02EC&field1="..voltage.."&field2="..dustDensity
-        .. " HTTP/1.1\r\n"
-        .. "Host: api.thingspeak.com\r\n"
-        .. "Connection: close\r\n"
-        .. "Accept: */*\r\n"
+        connout:send("POST /api/v1/sensor HTTP/1.1\r\n"
+        .. "Host: "..host.."\r\n"
+        .. "Content-Type: application/json\r\n"
+        .. "Accept: application/json\r\n"
+        .. "Connection: close\r\n"        
         .. "User-Agent: Mozilla/4.0 (compatible; esp8266 Lua; Windows NT 5.1)\r\n"
-        .. "\r\n")
-    end)
- 
-    connout:on("disconnection", function(connout, payloadout)
+        .. "Content-length: "..string.len(msg).."\r\n"
+        .. "\r\n"
+        .. msg)
+   end)
+   connout:on("disconnection", function(connout, payloadout)
+        print("Disconnected");
         connout:close();
         collectgarbage();
-    end)
- 
-    connout:connect(80,'api.thingspeak.com')
+   end) 
+   connout:connect(80, host)
 end
 
+-- Send data to api.less-smog.org
+function sendToLessSmog()
+  local voltage, dustDensity = ReadSharpSensor();
+  local msg = '{"api_key": "FGTEDVNHYEWERTJ", '
+        msg = msg..'"api_secret": "CVFGDYNTEDWED", '
+        msg = msg..'"latitude": 51.752469, '
+        msg = msg..'"longitude": -1.263779, '
+        msg = msg..'"name": "Indor Sharp", '
+        msg = msg..'"type": "indoor", '
+        msg = msg..'"quantity": "PM2.5", '
+        msg = msg..'"unit": "ug/m3", '
+        msg = msg..'"value": "'..dustDensity..'", '
+        msg = msg..'"chipid": "'..node.chipid()..'" }'        
+  postdata('api.less-smog.org', msg) 
+end
+
+-- Send data every 10s
 function startMeasurements()
-    -- Send data every 5s to ThingSpeak
-    tmr.alarm(2, 5000, 1, function() 
-      postThingSpeak() 
+    tmr.alarm(2, 10000, 1, function() 
+      sendToLessSmog()      
     end)
 end
